@@ -21,4 +21,5 @@ class KnowledgePoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     category = relationship("Category", back_populates="knowledge_points")
-    learn_records = relationship("LearnRecord", back_populates="knowledge_point")
+    learn_records = relationship("LearnRecord", back_populates="knowledge_point", cascade="all, delete-orphan")
+    questions = relationship("Question", back_populates="knowledge_point", cascade="all, delete-orphan")

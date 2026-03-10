@@ -1,12 +1,14 @@
 """拾刻 - 主入口"""
+import traceback
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from .core.config import settings
 from .core.database import init_db
-from .api import categories, knowledge, app_api
+from .api import categories, knowledge, app_api, questions
 
 
 @asynccontextmanager
@@ -32,8 +34,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """500 时返回详细错误信息，便于排查"""
+    tb = traceback.format_exc()
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "traceback": tb},
+    )
+
+
 app.include_router(categories.router, prefix=settings.api_prefix)
 app.include_router(knowledge.router, prefix=settings.api_prefix)
+app.include_router(questions.router, prefix=settings.api_prefix)
 app.include_router(app_api.router, prefix=settings.api_prefix)
 
 

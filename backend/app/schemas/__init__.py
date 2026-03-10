@@ -1,6 +1,7 @@
 """Pydantic  schemas"""
 from .category import CategoryCreate, CategoryUpdate, CategoryResponse
 from .knowledge import KnowledgePointCreate, KnowledgePointUpdate, KnowledgePointResponse
+from .question import QuestionCreate, QuestionUpdate, QuestionResponse
 from .user import (
     UserCreate,
     WechatLoginRequest,
@@ -12,6 +13,9 @@ from .user import (
 )
 
 __all__ = [
+    "QuestionCreate",
+    "QuestionUpdate",
+    "QuestionResponse",
     "CategoryCreate",
     "CategoryUpdate",
     "CategoryResponse",

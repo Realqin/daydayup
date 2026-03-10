@@ -16,6 +16,7 @@ from ..models import (
     LearnRecord,
     ExamRecord,
     ExamQuestion,
+    Question,
 )
 from ..schemas import (
     WechatLoginRequest,
@@ -345,10 +346,32 @@ async def get_profile(
     return UserProfile(user_id=user.id, is_vip=user.is_vip, has_onboarded=user.has_onboarded)
 
 
+@router.get("/exam/categories")
+async def list_exam_categories(
+    user_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """获取用户有权限的分类（供模块考试选择）"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    result = await db.execute(select(Category).order_by(Category.sort_order))
+    all_cats = result.scalars().all()
+    result = await db.execute(
+        select(UserCategory.category_id).where(UserCategory.user_id == user_id)
+    )
+    subscribed = {r[0] for r in result.all()}
+    accessible = [c for c in all_cats if c.is_free or user.is_vip or c.id in subscribed]
+    return [{"id": c.id, "name": c.name, "icon": c.icon} for c in accessible]
+
+
 @router.post("/exam/start")
 async def start_exam(
     user_id: str = Query(...),
-    size: int = 5,
+    exam_type: str = Query("placement", description="placement | module"),
+    category_id: str | None = Query(None, description="模块考试时必填"),
+    size: int = Query(10, ge=1, le=99),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -357,45 +380,62 @@ async def start_exam(
     - 从用户已学习过的知识点中随机抽题
     - 当前题型简化为“看内容，判断是否记得”（前端自由发挥）
     """
-    size = max(1, min(size, 20))
-
-    # 找到用户学过的知识点
-    result = await db.execute(
-        select(KnowledgePoint)
-        .join(LearnRecord, LearnRecord.knowledge_point_id == KnowledgePoint.id)
-        .where(LearnRecord.user_id == user_id, LearnRecord.action == "get")
-        .order_by(LearnRecord.learned_at.desc())
-    )
-    points = result.scalars().all()
-    if not points:
-        raise HTTPException(400, "暂无可出题的已学习知识点")
-
-    # 简单随机抽题
+    import json
     import random
 
-    sampled = random.sample(points, k=min(size, len(points)))
+    # 获取用户有权限的分类
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    result = await db.execute(select(Category).order_by(Category.sort_order))
+    all_cats = result.scalars().all()
+    result = await db.execute(
+        select(UserCategory.category_id).where(UserCategory.user_id == user_id)
+    )
+    subscribed = {r[0] for r in result.all()}
+    accessible = [c.id for c in all_cats if c.is_free or user.is_vip or c.id in subscribed]
+    if not accessible:
+        raise HTTPException(403, "暂无可用的知识分类，请先订阅")
+
+    if exam_type == "module":
+        if not category_id or category_id not in accessible:
+            raise HTTPException(400, "请选择有效的知识分类")
+        category_ids = [category_id]
+    else:
+        category_ids = accessible
+
+    result = await db.execute(
+        select(Question).where(Question.category_id.in_(category_ids))
+    )
+    pool = result.scalars().all()
+    if not pool:
+        raise HTTPException(400, "暂无可出题，请先在后台维护问题")
+    size = max(1, min(size, 99))
+    sampled = random.sample(pool, k=min(size, len(pool)))
 
     exam = ExamRecord(user_id=user_id, score=0, total=len(sampled))
     db.add(exam)
     await db.flush()
 
-    questions: list[ExamQuestion] = []
-    for p in sampled:
-        q = ExamQuestion(exam_id=exam.id, knowledge_point_id=p.id)
-        db.add(q)
-        questions.append(q)
+    exam_questions: list[ExamQuestion] = []
+    for q in sampled:
+        eq = ExamQuestion(exam_id=exam.id, question_id=q.id)
+        db.add(eq)
+        exam_questions.append(eq)
     await db.flush()
 
     return {
         "exam_id": exam.id,
+        "exam_type": exam_type,
         "questions": [
             {
-                "question_id": q.id,
-                "knowledge_point_id": q.knowledge_point_id,
-                "title": p.title,
-                "content": p.content,
+                "question_id": eq.id,
+                "title": q.title,
+                "options": json.loads(q.options) if q.options else [],
+                "correct_answer": q.correct_answer,
             }
-            for q, p in zip(questions, sampled)
+            for eq, q in zip(exam_questions, sampled)
         ],
     }
 
@@ -406,7 +446,7 @@ async def submit_exam(
     user_id: str = Query(...),
     db: AsyncSession = Depends(get_db),
 ):
-    """提交考试答案并计算得分（当前逻辑：全部算对，用于打通流程）"""
+    """提交考试答案并计算得分（选择题判分）"""
     exam_id = body.get("exam_id", "")
     answers = body.get("answers", [])
     result = await db.execute(select(ExamRecord).where(ExamRecord.id == exam_id, ExamRecord.user_id == user_id))
@@ -414,18 +454,22 @@ async def submit_exam(
     if not exam:
         raise HTTPException(404, "考试不存在")
 
-    # 简化：目前不做真正判题，全部记为正确，方便先打通前后端流程
-    score = exam.total
-    exam.score = score
-
-    # 更新问题记录
     answer_map = {item["question_id"]: item.get("user_answer", "") for item in answers}
-    result = await db.execute(select(ExamQuestion).where(ExamQuestion.exam_id == exam_id))
-    for q in result.scalars().all():
-        ua = answer_map.get(q.id, "")
-        q.user_answer = ua
-        q.is_correct = True
-
+    result = await db.execute(
+        select(ExamQuestion, Question)
+        .join(Question, ExamQuestion.question_id == Question.id)
+        .where(ExamQuestion.exam_id == exam_id)
+    )
+    score = 0
+    for eq, q in result.all():
+        ua = answer_map.get(eq.id, "")
+        eq.user_answer = ua
+        correct = "".join(sorted(q.correct_answer.upper()))
+        user_ans = "".join(sorted(str(ua or "").upper().strip()))
+        eq.is_correct = correct == user_ans
+        if eq.is_correct:
+            score += 1
+    exam.score = score
     return {"score": score, "total": exam.total}
 
 
@@ -475,4 +519,7 @@ async def get_knowledge_curve(
         q = q.where(LearnRecord.learned_at >= start, LearnRecord.learned_at <= end)
     result = await db.execute(q)
     rows = result.all()
-    return {"curve": [{"date": str(r.day), "count": r.count} for r in rows]}
+    return {
+        "curve": [{"date": str(r.day), "count": r.count} for r in rows],
+        "total_days": len(rows),  # 累计打卡天数
+    }

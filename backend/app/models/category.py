@@ -23,3 +23,4 @@ class Category(Base):
 
     knowledge_points = relationship("KnowledgePoint", back_populates="category", cascade="all, delete-orphan")
     user_categories = relationship("UserCategory", back_populates="category")
+    questions = relationship("Question", back_populates="category", cascade="all, delete-orphan")

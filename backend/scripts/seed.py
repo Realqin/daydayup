@@ -6,8 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import json
 from app.core.database import AsyncSessionLocal, init_db
-from app.models import Category, KnowledgePoint
+from app.models import Category, KnowledgePoint, Question
 
 
 async def seed():
@@ -51,8 +52,28 @@ async def seed():
                 )
                 db.add(p)
 
+        # 为知识点添加示例选择题
+        result = await db.execute(select(KnowledgePoint).limit(12))
+        points = result.scalars().all()
+        question_samples = [
+            ("abandon 的含义是？", ["A. 放弃", "B. 获得", "C. 建造", "D. 破坏"], "A"),
+            ("光合作用发生在？", ["A. 叶绿体", "B. 线粒体", "C. 细胞核", "D. 液泡"], "A"),
+            ("玫瑰常象征？", ["A. 爱情", "B. 友谊", "C. 和平", "D. 财富"], "A"),
+            ("jargon 的意思是？", ["A. 行话", "B. 诗歌", "C. 音乐", "D. 绘画"], "A"),
+        ]
+        for i, p in enumerate(points[: min(len(points), 8)]):
+            qs = question_samples[i % len(question_samples)]
+            q = Question(
+                knowledge_point_id=p.id,
+                category_id=p.category_id,
+                title=qs[0],
+                options=json.dumps(qs[1], ensure_ascii=False),
+                correct_answer=qs[2],
+            )
+            db.add(q)
+
         await db.commit()
-        print("Seed 完成：4 个分类，28 个知识点")
+        print("Seed 完成：4 个分类，28 个知识点，8 道选择题")
 
 
 if __name__ == "__main__":

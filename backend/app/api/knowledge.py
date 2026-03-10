@@ -1,6 +1,6 @@
 """知识点 API"""
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 import io
@@ -40,6 +40,38 @@ async def create_knowledge(data: KnowledgePointCreate, db: AsyncSession = Depend
     return point
 
 
+@router.post("/batch-delete")
+async def batch_delete_knowledge(ids: list[str] = Body(..., embed=True), db: AsyncSession = Depends(get_db)):
+    """批量删除知识点"""
+    if not ids:
+        return {"ok": True, "deleted": 0}
+    result = await db.execute(select(KnowledgePoint).where(KnowledgePoint.id.in_(ids)))
+    for p in result.scalars().all():
+        await db.delete(p)
+    return {"ok": True, "deleted": len(ids)}
+
+
+@router.get("/export/{category_id}")
+async def export_knowledge(category_id: str, db: AsyncSession = Depends(get_db)):
+    """导出知识点为 JSON"""
+    result = await db.execute(
+        select(KnowledgePoint).where(KnowledgePoint.category_id == category_id).order_by(KnowledgePoint.push_date)
+    )
+    points = result.scalars().all()
+    data = [
+        {
+            "id": p.id,
+            "title": p.title,
+            "content": p.content,
+            "push_date": str(p.push_date),
+            "extra": p.extra,
+        }
+        for p in points
+    ]
+    from fastapi.responses import JSONResponse
+    return JSONResponse(content=data)
+
+
 @router.get("/{point_id}", response_model=KnowledgePointResponse)
 async def get_knowledge(point_id: str, db: AsyncSession = Depends(get_db)):
     """获取知识点详情"""
@@ -59,7 +91,6 @@ async def update_knowledge(point_id: str, data: KnowledgePointUpdate, db: AsyncS
         raise HTTPException(404, "知识点不存在")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(point, k, v)
-    await db.refresh(point)
     return point
 
 
@@ -131,24 +162,3 @@ async def import_knowledge(
             created += 1
 
     return {"ok": True, "created": created}
-
-
-@router.get("/export/{category_id}")
-async def export_knowledge(category_id: str, db: AsyncSession = Depends(get_db)):
-    """导出知识点为 JSON"""
-    result = await db.execute(
-        select(KnowledgePoint).where(KnowledgePoint.category_id == category_id).order_by(KnowledgePoint.push_date)
-    )
-    points = result.scalars().all()
-    data = [
-        {
-            "id": p.id,
-            "title": p.title,
-            "content": p.content,
-            "push_date": str(p.push_date),
-            "extra": p.extra,
-        }
-        for p in points
-    ]
-    from fastapi.responses import JSONResponse
-    return JSONResponse(content=data)

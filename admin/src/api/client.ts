@@ -12,6 +12,7 @@ export interface Category {
   name: string;
   icon: string;
   is_free: boolean;
+  price?: number | null;
   sort_order: number;
 }
 

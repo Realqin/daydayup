@@ -23,16 +23,16 @@ class ExamRecord(Base):
 
 
 class ExamQuestion(Base):
-    """考试中的具体题目"""
+    """考试中的具体题目 - 用户-问题-答题结果"""
 
     __tablename__ = "exam_questions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=gen_id)
     exam_id: Mapped[str] = mapped_column(String(36), ForeignKey("exam_records.id"), index=True)
-    knowledge_point_id: Mapped[str] = mapped_column(String(36), ForeignKey("knowledge_points.id"))
-    # 简化题型：选择题或判断题可以通过 extra 字段扩展；当前仅记录是否答对
-    user_answer: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    question_id: Mapped[str] = mapped_column(String(36), ForeignKey("questions.id"), index=True)
+    user_answer: Mapped[str | None] = mapped_column(String(64), nullable=True)  # "A" | "ABCD" 等
     is_correct: Mapped[bool] = mapped_column(Boolean, default=False)
 
     exam = relationship("ExamRecord", back_populates="questions")
+    question = relationship("Question", back_populates="exam_questions")
 

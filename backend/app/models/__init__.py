@@ -4,6 +4,7 @@ from .category import Category
 from .knowledge import KnowledgePoint
 from .learn_record import LearnRecord
 from .exam import ExamRecord, ExamQuestion
+from .question import Question
 
 __all__ = [
     "User",
@@ -14,4 +15,5 @@ __all__ = [
     "LearnRecord",
     "ExamRecord",
     "ExamQuestion",
+    "Question",
 ]

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Table, Button, Modal, Form, Input, Switch, InputNumber, message } from "antd";
+import { Table, Button, Modal, Form, Input, Switch, InputNumber, message, Space } from "antd";
+import { DeleteOutlined } from "@ant-design/icons";
 import type { Category } from "../api/client";
 import { api } from "../api/client";
 
@@ -8,6 +9,7 @@ export default function Categories() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<Category | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [form] = Form.useForm();
 
   const load = async () => {
@@ -26,14 +28,35 @@ export default function Categories() {
     load();
   }, []);
 
+  useEffect(() => {
+    if (modalOpen && editing) {
+      form.setFieldsValue({
+        name: editing.name,
+        icon: editing.icon,
+        is_free: editing.is_free,
+        price: editing.price ?? undefined,
+        sort_order: editing.sort_order ?? 0,
+      });
+    } else if (modalOpen && !editing) {
+      form.resetFields();
+    }
+  }, [modalOpen, editing, form]);
+
   const handleSubmit = async () => {
-    const values = await form.validateFields();
     try {
+      const values = await form.validateFields();
+      const payload = {
+        name: values.name,
+        icon: values.icon,
+        is_free: values.is_free,
+        price: values.price ?? null,
+        sort_order: values.sort_order ?? 0,
+      };
       if (editing) {
-        await api.put(`/categories/${editing.id}`, values);
+        await api.put(`/categories/${editing.id}`, payload);
         message.success("更新成功");
       } else {
-        await api.post("/categories", values);
+        await api.post("/categories", payload);
         message.success("创建成功");
       }
       setModalOpen(false);
@@ -47,7 +70,6 @@ export default function Categories() {
 
   const handleEdit = (row: Category) => {
     setEditing(row);
-    form.setFieldsValue(row);
     setModalOpen(true);
   };
 
@@ -61,18 +83,49 @@ export default function Categories() {
     }
   };
 
+  const handleBatchDelete = async () => {
+    if (selectedRowKeys.length === 0) {
+      message.warning("请先选择要删除的项");
+      return;
+    }
+    try {
+      const { data } = await api.post("/categories/batch-delete", {
+        ids: selectedRowKeys as string[],
+      });
+      message.success(`已删除 ${data.deleted} 项`);
+      setSelectedRowKeys([]);
+      load();
+    } catch (e) {
+      message.error("批量删除失败");
+    }
+  };
+
   return (
     <div style={{ padding: 24, background: "#fff", minHeight: "100%" }}>
-      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between" }}>
-        <h2>知识分类</h2>
-        <Button type="primary" onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>
-          新增分类
-        </Button>
+      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h2 style={{ margin: 0 }}>知识分类</h2>
+        <Space>
+          <Button
+            danger
+            icon={<DeleteOutlined />}
+            onClick={handleBatchDelete}
+            disabled={selectedRowKeys.length === 0}
+          >
+            批量删除
+          </Button>
+          <Button type="primary" onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>
+            新增分类
+          </Button>
+        </Space>
       </div>
       <Table
         loading={loading}
         dataSource={list}
         rowKey="id"
+        rowSelection={{
+          selectedRowKeys,
+          onChange: (keys) => setSelectedRowKeys(keys),
+        }}
         columns={[
           { title: "图标", dataIndex: "icon", width: 80, render: (v) => <span style={{ fontSize: 24 }}>{v}</span> },
           { title: "名称", dataIndex: "name" },

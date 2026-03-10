@@ -6,7 +6,6 @@ import {
   Form,
   Input,
   Select,
-  DatePicker,
   message,
   Upload,
   Space,
@@ -14,14 +13,23 @@ import {
 import { DeleteOutlined } from "@ant-design/icons";
 import type { Category, KnowledgePoint } from "../api/client";
 import { api } from "../api/client";
-import dayjs from "dayjs";
 
-export default function Knowledge() {
-  const [list, setList] = useState<KnowledgePoint[]>([]);
+export interface Question {
+  id: string;
+  knowledge_point_id: string;
+  category_id: string;
+  title: string;
+  options: string[];
+  correct_answer: string;
+}
+
+export default function Questions() {
+  const [list, setList] = useState<Question[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [knowledgePoints, setKnowledgePoints] = useState<KnowledgePoint[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
-  const [editing, setEditing] = useState<KnowledgePoint | null>(null);
+  const [editing, setEditing] = useState<Question | null>(null);
   const [filterCategory, setFilterCategory] = useState<string | null>(null);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [form] = Form.useForm();
@@ -31,11 +39,18 @@ export default function Knowledge() {
     setCategories(data);
   };
 
+  const loadKnowledgePoints = async (categoryId?: string) => {
+    const params = categoryId ? { category_id: categoryId } : {};
+    const { data } = await api.get<KnowledgePoint[]>("/knowledge", { params });
+    setKnowledgePoints(data);
+  };
+
   const load = async () => {
     setLoading(true);
     try {
-      const params = filterCategory ? { category_id: filterCategory } : {};
-      const { data } = await api.get<KnowledgePoint[]>("/knowledge", { params });
+      const params: Record<string, string> = {};
+      if (filterCategory) params.category_id = filterCategory;
+      const { data } = await api.get<Question[]>("/questions", { params });
       setList(data);
     } catch (e) {
       message.error("加载失败");
@@ -50,17 +65,20 @@ export default function Knowledge() {
 
   useEffect(() => {
     load();
+    loadKnowledgePoints(filterCategory ?? undefined);
   }, [filterCategory]);
 
   const handleSubmit = async () => {
     const values = await form.validateFields();
-    values.push_date = values.push_date?.format("YYYY-MM-DD");
+    if (typeof values.options === "string") {
+      values.options = values.options.split("\n").filter((s: string) => s.trim());
+    }
     try {
       if (editing) {
-        await api.put(`/knowledge/${editing.id}`, { ...values, category_id: undefined });
+        await api.put(`/questions/${editing.id}`, values);
         message.success("更新成功");
       } else {
-        await api.post("/knowledge", values);
+        await api.post("/questions", values);
         message.success("创建成功");
       }
       setModalOpen(false);
@@ -72,15 +90,19 @@ export default function Knowledge() {
     }
   };
 
-  const handleEdit = (row: KnowledgePoint) => {
+  const handleEdit = (row: Question) => {
     setEditing(row);
-    form.setFieldsValue({ ...row, push_date: row.push_date ? dayjs(row.push_date) : null });
+    loadKnowledgePoints(row.category_id);
+    form.setFieldsValue({
+      ...row,
+      options: Array.isArray(row.options) ? row.options.join("\n") : "",
+    });
     setModalOpen(true);
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await api.delete(`/knowledge/${id}`);
+      await api.delete(`/questions/${id}`);
       message.success("删除成功");
       load();
     } catch (e) {
@@ -94,7 +116,7 @@ export default function Knowledge() {
       return;
     }
     try {
-      const { data } = await api.post("/knowledge/batch-delete", {
+      const { data } = await api.post("/questions/batch-delete", {
         ids: selectedRowKeys as string[],
       });
       message.success(`已删除 ${data.deleted} 项`);
@@ -116,7 +138,7 @@ export default function Knowledge() {
     const fd = new FormData();
     fd.append("file", file);
     try {
-      const { data } = await api.post(`/knowledge/import?category_id=${importCategory}`, fd, {
+      const { data } = await api.post(`/questions/import?category_id=${importCategory}`, fd, {
         headers: { "Content-Type": "multipart/form-data" },
       });
       message.success(`导入成功，新增 ${data.created} 条`);
@@ -130,11 +152,11 @@ export default function Knowledge() {
 
   const handleExport = async (categoryId: string) => {
     try {
-      const { data } = await api.get(`/knowledge/export/${categoryId}`);
+      const { data } = await api.get(`/questions/export/${categoryId}`);
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = `knowledge_${categoryId}.json`;
+      a.download = `questions_${categoryId}.json`;
       a.click();
       URL.revokeObjectURL(a.href);
       message.success("导出成功");
@@ -145,9 +167,18 @@ export default function Knowledge() {
 
   return (
     <div style={{ padding: 24, background: "#fff", minHeight: "100%" }}>
-      <div style={{ marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+      <div
+        style={{
+          marginBottom: 16,
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          flexWrap: "wrap",
+          gap: 12,
+        }}
+      >
         <Space align="center">
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>知识点</h2>
+          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 600 }}>选择题</h2>
           <Select
             placeholder="筛选分类"
             allowClear
@@ -155,7 +186,9 @@ export default function Knowledge() {
             onChange={(v) => setFilterCategory(v ?? null)}
           >
             {categories.map((c) => (
-              <Select.Option key={c.id} value={c.id}>{c.icon} {c.name}</Select.Option>
+              <Select.Option key={c.id} value={c.id}>
+                {c.icon} {c.name}
+              </Select.Option>
             ))}
           </Select>
         </Space>
@@ -175,8 +208,15 @@ export default function Knowledge() {
           >
             导出当前分类
           </Button>
-          <Button type="primary" onClick={() => { setEditing(null); form.resetFields(); setModalOpen(true); }}>
-            新增知识点
+          <Button
+            type="primary"
+            onClick={() => {
+              setEditing(null);
+              form.resetFields();
+              setModalOpen(true);
+            }}
+          >
+            新增选择题
           </Button>
         </Space>
       </div>
@@ -188,59 +228,91 @@ export default function Knowledge() {
           selectedRowKeys,
           onChange: (keys) => setSelectedRowKeys(keys),
         }}
-        scroll={{ x: 600 }}
+        scroll={{ x: 700 }}
         columns={[
-          { title: "标题", dataIndex: "title", ellipsis: true, width: 200 },
+          { title: "题目", dataIndex: "title", ellipsis: true, width: 240 },
           {
             title: "分类",
             dataIndex: "category_id",
-            width: 120,
-            ellipsis: true,
+            width: 100,
             render: (id) => categories.find((c) => c.id === id)?.name ?? id,
           },
-          { title: "推送日期", dataIndex: "push_date", width: 120 },
+          {
+            title: "正确答案",
+            dataIndex: "correct_answer",
+            width: 80,
+          },
           {
             title: "操作",
-            width: 160,
+            width: 140,
             render: (_, row) => (
               <>
-                <Button type="link" size="small" onClick={() => handleEdit(row)}>编辑</Button>
-                <Button type="link" size="small" danger onClick={() => handleDelete(row.id)}>删除</Button>
+                <Button type="link" size="small" onClick={() => handleEdit(row)}>
+                  编辑
+                </Button>
+                <Button type="link" size="small" danger onClick={() => handleDelete(row.id)}>
+                  删除
+                </Button>
               </>
             ),
           },
         ]}
       />
       <Modal
-        title={editing ? "编辑知识点" : "新增知识点"}
+        title={editing ? "编辑选择题" : "新增选择题"}
         open={modalOpen}
         onOk={handleSubmit}
-        onCancel={() => { setModalOpen(false); setEditing(null); }}
+        onCancel={() => {
+          setModalOpen(false);
+          setEditing(null);
+        }}
         width={600}
       >
         <Form form={form} layout="vertical">
           <Form.Item name="category_id" label="分类" rules={[{ required: true }]}>
-            <Select placeholder="选择分类" disabled={!!editing}>
+            <Select
+              placeholder="选择分类"
+              disabled={!!editing}
+              onChange={(v) => loadKnowledgePoints(v)}
+            >
               {categories.map((c) => (
-                <Select.Option key={c.id} value={c.id}>{c.icon} {c.name}</Select.Option>
+                <Select.Option key={c.id} value={c.id}>
+                  {c.icon} {c.name}
+                </Select.Option>
               ))}
             </Select>
           </Form.Item>
-          <Form.Item name="title" label="标题" rules={[{ required: true }]}>
+          <Form.Item name="knowledge_point_id" label="关联知识点" rules={[{ required: true }]}>
+            <Select placeholder="选择知识点" showSearch optionFilterProp="label">
+              {knowledgePoints.map((p) => (
+                <Select.Option key={p.id} value={p.id} label={p.title}>
+                  {p.title}
+                </Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="title" label="题目" rules={[{ required: true }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="content" label="内容" rules={[{ required: true }]}>
-            <Input.TextArea rows={4} />
+          <Form.Item
+            name="options"
+            label="选项（每行一个，如 A. xxx）"
+            rules={[{ required: true }]}
+          >
+            <Input.TextArea rows={5} placeholder="A. 选项一&#10;B. 选项二&#10;C. 选项三" />
           </Form.Item>
-          <Form.Item name="push_date" label="推送日期" rules={[{ required: true }]}>
-            <DatePicker style={{ width: "100%" }} />
+          <Form.Item name="correct_answer" label="正确答案（如 A 或 ABCD）" rules={[{ required: true }]}>
+            <Input placeholder="A" />
           </Form.Item>
         </Form>
       </Modal>
       <Modal
-        title="导入知识点"
+        title="导入选择题"
         open={importModalOpen}
-        onCancel={() => { setImportModalOpen(false); setImportCategory(null); }}
+        onCancel={() => {
+          setImportModalOpen(false);
+          setImportCategory(null);
+        }}
         footer={null}
       >
         <Space direction="vertical" style={{ width: "100%" }}>
@@ -251,17 +323,26 @@ export default function Knowledge() {
             onChange={setImportCategory}
           >
             {categories.map((c) => (
-              <Select.Option key={c.id} value={c.id}>{c.icon} {c.name}</Select.Option>
+              <Select.Option key={c.id} value={c.id}>
+                {c.icon} {c.name}
+              </Select.Option>
             ))}
           </Select>
           <Upload
-            accept=".json,.xlsx,.xls"
-            beforeUpload={(f) => { handleImport(f); return false; }}
+            accept=".json"
+            beforeUpload={(f) => {
+              handleImport(f);
+              return false;
+            }}
             showUploadList={false}
           >
-            <Button type="primary" disabled={!importCategory}>选择文件上传</Button>
+            <Button type="primary" disabled={!importCategory}>
+              选择 JSON 文件上传
+            </Button>
           </Upload>
-          <span style={{ color: "#999", fontSize: 12 }}>支持 JSON 或 Excel，需包含 title、content、push_date 列</span>
+          <span style={{ color: "#999", fontSize: 12 }}>
+            JSON 格式：[{"{title, options, correct_answer, knowledge_point_id}"}]
+          </span>
         </Space>
       </Modal>
     </div>

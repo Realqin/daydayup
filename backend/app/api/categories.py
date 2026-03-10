@@ -1,5 +1,5 @@
 """分类 API"""
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -27,6 +27,17 @@ async def create_category(data: CategoryCreate, db: AsyncSession = Depends(get_d
     return category
 
 
+@router.post("/batch-delete")
+async def batch_delete_categories(ids: list[str] = Body(..., embed=True), db: AsyncSession = Depends(get_db)):
+    """批量删除分类"""
+    if not ids:
+        return {"ok": True, "deleted": 0}
+    result = await db.execute(select(Category).where(Category.id.in_(ids)))
+    for c in result.scalars().all():
+        await db.delete(c)
+    return {"ok": True, "deleted": len(ids)}
+
+
 @router.get("/{category_id}", response_model=CategoryResponse)
 async def get_category(category_id: str, db: AsyncSession = Depends(get_db)):
     """获取分类详情"""
@@ -46,7 +57,7 @@ async def update_category(category_id: str, data: CategoryUpdate, db: AsyncSessi
         raise HTTPException(404, "分类不存在")
     for k, v in data.model_dump(exclude_unset=True).items():
         setattr(category, k, v)
-    await db.refresh(category)
+    # 不调用 refresh：refresh 会从 DB 重新加载并覆盖内存中的修改，导致更新丢失
     return category
 
 

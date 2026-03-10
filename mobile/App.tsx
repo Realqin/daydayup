@@ -15,6 +15,7 @@ import * as Notifications from "expo-notifications";
 import * as Device from "expo-device";
 import { NavigationContainer } from "@react-navigation/native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import Svg, { Path, Circle, Ellipse } from "react-native-svg";
 import { api, Category, KnowledgePoint } from "./src/api";
 
 Notifications.setNotificationHandler({
@@ -25,8 +26,21 @@ Notifications.setNotificationHandler({
   }),
 });
 
-type Step = "login" | "permission" | "onboard" | "home";
+type Step = "login" | "onboard" | "home";
 const Tab = createBottomTabNavigator();
+
+/** 后台静默请求通知权限并上报 token */
+async function registerPushInBackground(userId: string) {
+  if (!Device.isDevice) return;
+  const { status } = await Notifications.getPermissionsAsync();
+  if (status !== "granted") {
+    await Notifications.requestPermissionsAsync();
+  }
+  try {
+    const token = (await Notifications.getExpoPushTokenAsync()).data;
+    await api.post(`/app/push-token?user_id=${userId}`, { token, platform: Platform.OS });
+  } catch {}
+}
 
 export default function App() {
   const [userId, setUserId] = useState<string | null>(null);
@@ -40,55 +54,30 @@ export default function App() {
       setUserId(data.user_id);
       setIsVip(data.is_vip);
       setHasOnboarded(data.has_onboarded);
-      setStep("permission");
+      registerPushInBackground(data.user_id);
+      setStep(data.has_onboarded ? "home" : "onboard");
     } catch (e) {
       Alert.alert("登录失败", String(e));
     }
   };
 
-  const registerForPushNotifications = async () => {
-    if (!Device.isDevice) {
-      setStep(hasOnboarded ? "home" : "onboard");
-      return;
-    }
-    const { status: existing } = await Notifications.getPermissionsAsync();
-    if (existing !== "granted") {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("需要通知权限才能使用拾刻", "请在系统设置中开启通知权限");
-      }
-    }
-    if (userId) {
-      try {
-        const token = (await Notifications.getExpoPushTokenAsync()).data;
-        await api.post(`/app/push-token?user_id=${userId}`, { token, platform: Platform.OS });
-      } catch {}
-    }
-    setStep(hasOnboarded ? "home" : "onboard");
-  };
-
   if (step === "login") {
     return (
-      <View style={styles.container}>
-        <Text style={styles.title}>拾刻</Text>
-        <Text style={styles.subtitle}>使用微信账号登录，一起开始微学习</Text>
-        <TouchableOpacity style={styles.btn} onPress={handleWechatLogin}>
-          <Text style={styles.btnText}>微信登录（模拟）</Text>
-        </TouchableOpacity>
-        <StatusBar style="auto" />
-      </View>
-    );
-  }
-
-  if (step === "permission") {
-    return (
-      <View style={styles.container}>
-        <Text style={styles.title}>开启通知</Text>
-        <Text style={styles.subtitle}>每天 1 分钟，无压积累，需要通知提醒你学习</Text>
-        <TouchableOpacity style={styles.btn} onPress={registerForPushNotifications}>
-          <Text style={styles.btnText}>允许通知</Text>
-        </TouchableOpacity>
-        <StatusBar style="auto" />
+      <View style={styles.loginContainer}>
+        <View style={styles.loginBgShape1} />
+        <View style={styles.loginBgShape2} />
+        <View style={styles.loginContent}>
+          <View style={styles.loginIllustration}>
+            <MeditationIllustration />
+          </View>
+          <Text style={styles.loginTitle}>拾刻</Text>
+          <Text style={styles.loginSlogan}>拾取片刻光阴，收获点滴智慧</Text>
+          <TouchableOpacity style={styles.wechatBtn} onPress={handleWechatLogin}>
+            <Text style={styles.wechatIcon}>💬</Text>
+            <Text style={styles.wechatBtnText}>微信快捷登录</Text>
+          </TouchableOpacity>
+        </View>
+        <StatusBar style="dark" />
       </View>
     );
   }
@@ -120,6 +109,24 @@ export default function App() {
   );
 }
 
+/** 冥想人物插画 - 黑白线条风格 */
+function MeditationIllustration() {
+  return (
+    <Svg width={180} height={200} viewBox="0 0 180 200">
+      <Circle cx="90" cy="45" r="28" stroke="#333" strokeWidth="2" fill="none" />
+      <Path
+        d="M 62 73 Q 90 95 118 73 L 118 120 Q 90 140 62 120 Z"
+        stroke="#333"
+        strokeWidth="2"
+        fill="none"
+      />
+      <Path d="M 75 95 L 65 130 M 105 95 L 115 130" stroke="#333" strokeWidth="2" fill="none" />
+      <Ellipse cx="90" cy="155" rx="50" ry="12" stroke="#333" strokeWidth="2" fill="none" />
+      <Path d="M 70 95 L 55 105 M 110 95 L 125 105" stroke="#333" strokeWidth="2" fill="none" />
+    </Svg>
+  );
+}
+
 // ========== 知识 Tab ==========
 function KnowledgeTab({
   userId,
@@ -136,7 +143,8 @@ function KnowledgeTab({
 }) {
   const [mode, setMode] = useState<"onboard" | "list">(hasOnboarded ? "list" : "onboard");
   const [categories, setCategories] = useState<Category[]>([]);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showOnboardHint, setShowOnboardHint] = useState(false);
   const [loading, setLoading] = useState(false);
   const [payModal, setPayModal] = useState<{ category?: Category; type: "category" | "vip" } | null>(null);
   const [currentPoint, setCurrentPoint] = useState<KnowledgePoint & { learned?: boolean } | null>(null);
@@ -172,24 +180,23 @@ function KnowledgeTab({
     else loadCategories();
   }, [mode, userId]);
 
-  const toggleOnboard = (c: Category) => {
+  const selectOnboard = (c: Category) => {
     if (!c.is_free && !isVip) {
       setPayModal({ category: c, type: "category" });
       return;
     }
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(c.id)) next.delete(c.id);
-      else next.add(c.id);
-      return next;
-    });
+    setSelectedId((prev) => (prev === c.id ? null : c.id));
   };
 
   const confirmOnboard = async () => {
-    for (const cid of selectedIds) {
-      await api.post(`/app/subscribe?user_id=${userId}&category_id=${cid}`);
-    }
+    if (!selectedId) return;
+    await api.post(`/app/subscribe?user_id=${userId}&category_id=${selectedId}`);
     await api.post(`/app/onboard-done?user_id=${userId}`);
+    setShowOnboardHint(true);
+  };
+
+  const dismissOnboardHint = () => {
+    setShowOnboardHint(false);
     onFinishedOnboard();
     setMode("list");
     loadCategories();
@@ -233,27 +240,28 @@ function KnowledgeTab({
     Alert.alert("已加入稍后", "一小时后会再次推送");
   };
 
-  // 首次引导：选择知识类型
+  // 首次引导：选择知识类型（单选）
   if (mode === "onboard") {
     return (
       <View style={styles.container}>
         <Text style={styles.title}>选择知识类型</Text>
-        <Text style={styles.subtitle}>可多选，免费类型直接选；付费类型需先开通</Text>
+        <Text style={styles.subtitle}>选择你感兴趣的知识领域，免费类型直接选</Text>
         {loading ? (
           <Text style={styles.subtitle}>加载中...</Text>
         ) : (
           <ScrollView style={styles.list}>
             {categories.map((c) => {
               const locked = !c.is_free && !isVip;
+              const selected = selectedId === c.id;
               return (
                 <TouchableOpacity
                   key={c.id}
                   style={[
                     styles.card,
                     locked && styles.cardLocked,
-                    selectedIds.has(c.id) && styles.cardSelected,
+                    selected && styles.cardSelected,
                   ]}
-                  onPress={() => toggleOnboard(c)}
+                  onPress={() => selectOnboard(c)}
                 >
                   <Text style={[styles.cardIcon, locked && styles.cardLockedText]}>{c.icon}</Text>
                   <View style={{ flex: 1 }}>
@@ -264,17 +272,17 @@ function KnowledgeTab({
                       </Text>
                     )}
                   </View>
-                  {selectedIds.has(c.id) && <Text style={styles.check}>✓</Text>}
-                  {locked && !selectedIds.has(c.id) && <Text style={styles.lockIcon}>🔒</Text>}
+                  {selected && <Text style={styles.check}>✓</Text>}
+                  {locked && !selected && <Text style={styles.lockIcon}>🔒</Text>}
                 </TouchableOpacity>
               );
             })}
           </ScrollView>
         )}
         <TouchableOpacity
-          style={[styles.btn, selectedIds.size === 0 && styles.btnDisabled]}
+          style={[styles.btn, !selectedId && styles.btnDisabled]}
           onPress={confirmOnboard}
-          disabled={selectedIds.size === 0}
+          disabled={!selectedId}
         >
           <Text style={styles.btnText}>开始学习</Text>
         </TouchableOpacity>
@@ -285,12 +293,22 @@ function KnowledgeTab({
           onClose={() => setPayModal(null)}
           userId={userId}
           onSuccess={(categoryId?: string) => {
-            if (categoryId) setSelectedIds((s) => new Set([...s, categoryId]));
+            if (categoryId) setSelectedId(categoryId);
             setPayModal(null);
             onVipChange(true);
-            loadCategories();
+            loadOnboardCategories();
           }}
         />
+        <Modal visible={showOnboardHint} transparent animationType="fade">
+          <View style={styles.modalMask}>
+            <View style={styles.onboardHintModal}>
+              <Text style={styles.onboardHintText}>知识要进入我们的脑海咯</Text>
+              <TouchableOpacity style={styles.modalBtnGet} onPress={dismissOnboardHint}>
+                <Text style={styles.modalBtnGetText}>好的</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
         <StatusBar style="auto" />
       </View>
     );
@@ -468,24 +486,63 @@ function PayModal({
 }
 
 // ========== 考试 Tab ==========
+type ExamQuestion = {
+  question_id: string;
+  title: string;
+  options: string[];
+  correct_answer: string;
+};
+
 function ExamTab({ userId }: { userId: string }) {
   const [loading, setLoading] = useState(false);
+  const [moduleCategories, setModuleCategories] = useState<{ id: string; name: string; icon: string }[]>([]);
+  const [showModulePicker, setShowModulePicker] = useState(false);
   const [exam, setExam] = useState<{
     exam_id: string;
-    questions: { question_id: string; title: string; content: string }[];
+    exam_type: string;
+    questions: ExamQuestion[];
   } | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [result, setResult] = useState<{ score: number; total: number } | null>(null);
 
-  const startExam = async () => {
+  const startPlacementExam = async () => {
     setLoading(true);
     setResult(null);
     try {
-      const { data } = await api.post(`/app/exam/start?user_id=${userId}&size=5`);
+      const { data } = await api.post(
+        `/app/exam/start?user_id=${userId}&exam_type=placement&size=10`
+      );
       setExam(data);
       setAnswers({});
     } catch (e: any) {
-      Alert.alert("提示", e?.response?.data?.detail || "暂无可出题的已学习知识点，请先学习一些内容");
+      Alert.alert("提示", e?.response?.data?.detail || "暂无可出题，请先在后台维护问题");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadModuleCategories = async () => {
+    try {
+      const { data } = await api.get(`/app/exam/categories?user_id=${userId}`);
+      setModuleCategories(data);
+      setShowModulePicker(true);
+    } catch (e: any) {
+      Alert.alert("提示", e?.response?.data?.detail || "加载失败");
+    }
+  };
+
+  const startModuleExam = async (categoryId: string) => {
+    setShowModulePicker(false);
+    setLoading(true);
+    setResult(null);
+    try {
+      const { data } = await api.post(
+        `/app/exam/start?user_id=${userId}&exam_type=module&category_id=${categoryId}&size=10`
+      );
+      setExam(data);
+      setAnswers({});
+    } catch (e: any) {
+      Alert.alert("提示", e?.response?.data?.detail || "暂无可出题");
     } finally {
       setLoading(false);
     }
@@ -511,6 +568,21 @@ function ExamTab({ userId }: { userId: string }) {
     }
   };
 
+  const toggleOption = (questionId: string, optionLetter: string) => {
+    setAnswers((prev) => {
+      const cur = prev[questionId] || "";
+      const letters = cur.split("").filter(Boolean);
+      if (letters.includes(optionLetter)) {
+        return { ...prev, [questionId]: letters.filter((l) => l !== optionLetter).sort().join("") };
+      }
+      return { ...prev, [questionId]: [...letters, optionLetter].sort().join("") };
+    });
+  };
+
+  const selectSingleOption = (questionId: string, optionLetter: string) => {
+    setAnswers((prev) => ({ ...prev, [questionId]: optionLetter }));
+  };
+
   if (result) {
     return (
       <View style={styles.container}>
@@ -518,8 +590,36 @@ function ExamTab({ userId }: { userId: string }) {
         <Text style={styles.subtitle}>
           得分 {result.score} / {result.total}
         </Text>
-        <TouchableOpacity style={styles.btn} onPress={startExam}>
-          <Text style={styles.btnText}>再来一次</Text>
+        <TouchableOpacity style={styles.btn} onPress={() => setResult(null)}>
+          <Text style={styles.btnText}>返回</Text>
+        </TouchableOpacity>
+        <StatusBar style="auto" />
+      </View>
+    );
+  }
+
+  if (showModulePicker) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>选择知识模块</Text>
+        <Text style={styles.subtitle}>选择要考试的模块</Text>
+        <ScrollView style={styles.list}>
+          {moduleCategories.map((c) => (
+            <TouchableOpacity
+              key={c.id}
+              style={styles.card}
+              onPress={() => startModuleExam(c.id)}
+            >
+              <Text style={styles.cardIcon}>{c.icon}</Text>
+              <Text style={styles.cardName}>{c.name}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        <TouchableOpacity
+          style={[styles.modalBtn, styles.modalBtnLater, { marginTop: 16, alignSelf: "center" }]}
+          onPress={() => setShowModulePicker(false)}
+        >
+          <Text>返回</Text>
         </TouchableOpacity>
         <StatusBar style="auto" />
       </View>
@@ -531,25 +631,45 @@ function ExamTab({ userId }: { userId: string }) {
       <View style={styles.container}>
         <Text style={styles.sectionTitle}>随机考试（{exam.questions.length} 题）</Text>
         <ScrollView style={styles.list}>
-          {exam.questions.map((q, i) => (
-            <View key={q.question_id} style={styles.examCard}>
-              <Text style={styles.examQ}>第 {i + 1} 题：{q.title}</Text>
-              <Text style={styles.modalBody}>{q.content}</Text>
-              <Text style={styles.examLabel}>你的答案（填空/简答）：</Text>
-              <TextInput
-                style={styles.examInput}
-                placeholder="请输入答案"
-                value={answers[q.question_id] ?? ""}
-                onChangeText={(v) => setAnswers((a) => ({ ...a, [q.question_id]: v }))}
-              />
-            </View>
-          ))}
+          {exam.questions.map((q, i) => {
+            const selected = answers[q.question_id] || "";
+            const isMulti = q.correct_answer.length > 1;
+            const optionLetters = "ABCDEFGH".slice(0, q.options.length);
+            return (
+              <View key={q.question_id} style={styles.examCard}>
+                <Text style={styles.examQ}>第 {i + 1} 题：{q.title}</Text>
+                {q.options.map((opt, j) => {
+                  const letter = optionLetters[j];
+                  const isSelected = isMulti ? selected.includes(letter) : selected === letter;
+                  return (
+                    <TouchableOpacity
+                      key={j}
+                      style={[
+                        styles.examOption,
+                        isSelected && styles.examOptionSelected,
+                      ]}
+                      onPress={() =>
+                        isMulti ? toggleOption(q.question_id, letter) : selectSingleOption(q.question_id, letter)
+                      }
+                    >
+                      <Text style={[styles.examOptionText, isSelected && styles.examOptionTextSelected]}>
+                        {opt}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            );
+          })}
         </ScrollView>
         <View style={{ flexDirection: "row", gap: 12, padding: 16 }}>
           <TouchableOpacity style={[styles.btn, { flex: 1 }]} onPress={submitExam}>
             <Text style={styles.btnText}>交卷</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.modalBtnLater, { flex: 1 }]} onPress={() => setExam(null)}>
+          <TouchableOpacity
+            style={[styles.btn, styles.modalBtnLater, { flex: 1 }]}
+            onPress={() => setExam(null)}
+          >
             <Text>放弃</Text>
           </TouchableOpacity>
         </View>
@@ -561,14 +681,22 @@ function ExamTab({ userId }: { userId: string }) {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>随机考试</Text>
-      <Text style={styles.subtitle}>从已学过的知识点中随机抽题</Text>
-      <TouchableOpacity
-        style={[styles.btn, loading && styles.btnDisabled]}
-        onPress={startExam}
-        disabled={loading}
-      >
-        <Text style={styles.btnText}>{loading ? "加载中..." : "开始考试"}</Text>
-      </TouchableOpacity>
+      <View style={{ gap: 12, width: "100%", maxWidth: 280, alignSelf: "center" }}>
+        <TouchableOpacity
+          style={[styles.btn, loading && styles.btnDisabled]}
+          onPress={startPlacementExam}
+          disabled={loading}
+        >
+          <Text style={styles.btnText}>{loading ? "加载中..." : "摸底考试"}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.btn, loading && styles.btnDisabled]}
+          onPress={loadModuleCategories}
+          disabled={loading}
+        >
+          <Text style={styles.btnText}>模块考试</Text>
+        </TouchableOpacity>
+      </View>
       <StatusBar style="auto" />
     </View>
   );
@@ -586,6 +714,7 @@ function ProfileTab({
 }) {
   const [examRecords, setExamRecords] = useState<{ id: string; score: number; total: number; created_at: string }[]>([]);
   const [curve, setCurve] = useState<{ date: string; count: number }[]>([]);
+  const [totalDays, setTotalDays] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -597,6 +726,7 @@ function ProfileTab({
         ]);
         setExamRecords(r1.data);
         setCurve(r2.data.curve || []);
+        setTotalDays(r2.data.total_days ?? r2.data.curve?.length ?? 0);
       } catch {}
       setLoading(false);
     })();
@@ -643,26 +773,23 @@ function ProfileTab({
           ))}
         </ScrollView>
       )}
-      <Text style={styles.sectionTitle}>学习曲线（按日统计）</Text>
+      <Text style={styles.sectionTitle}>打卡日历</Text>
+      <Text style={styles.subtitle}>累计打卡 {totalDays} 天</Text>
       {curve.length === 0 ? (
-        <Text style={styles.subtitle}>暂无数据</Text>
+        <Text style={styles.subtitle}>暂无打卡记录，点击 Get 开始学习</Text>
       ) : (
-        <ScrollView horizontal style={{ marginHorizontal: -24, paddingHorizontal: 24 }}>
-          <View style={styles.curveContainer}>
-            {curve.slice(-14).map((d, i) => (
-              <View key={d.date} style={styles.curveBar}>
-                <View
-                  style={[
-                    styles.curveFill,
-                    { height: `${Math.min(100, (d.count / Math.max(...curve.map((x) => x.count), 1)) * 80)}%` },
-                  ]}
-                />
-                <Text style={styles.curveLabel}>{d.date.slice(5)}</Text>
-                <Text style={styles.curveCount}>{d.count}</Text>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
+        <View style={styles.calendarGrid}>
+          {curve.slice(-42).map((d) => (
+            <View
+              key={d.date}
+              style={[styles.calendarCell, d.count > 0 && styles.calendarCellChecked]}
+            >
+              <Text style={[styles.calendarCellText, d.count > 0 && styles.calendarCellTextChecked]}>
+                {d.date.slice(8)}
+              </Text>
+            </View>
+          ))}
+        </View>
       )}
       <StatusBar style="auto" />
     </View>
@@ -670,6 +797,46 @@ function ProfileTab({
 }
 
 const styles = StyleSheet.create({
+  loginContainer: { flex: 1, backgroundColor: "#fff" },
+  loginBgShape1: {
+    position: "absolute",
+    top: -40,
+    left: -60,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: "rgba(255, 200, 200, 0.4)",
+  },
+  loginBgShape2: {
+    position: "absolute",
+    top: "35%",
+    right: -80,
+    width: 200,
+    height: 200,
+    borderRadius: 100,
+    backgroundColor: "rgba(255, 220, 220, 0.35)",
+  },
+  loginContent: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: 32,
+  },
+  loginIllustration: { marginBottom: 24 },
+  loginTitle: { fontSize: 32, fontWeight: "bold", color: "#1a1a2e", marginBottom: 8 },
+  loginSlogan: { fontSize: 15, color: "#666", textAlign: "center", marginBottom: 48 },
+  wechatBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#07C160",
+    paddingVertical: 14,
+    paddingHorizontal: 28,
+    borderRadius: 12,
+    gap: 8,
+  },
+  wechatIcon: { fontSize: 20 },
+  wechatBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   container: { flex: 1, backgroundColor: "#F5F7FA", padding: 24, paddingTop: 48 },
   title: { fontSize: 24, fontWeight: "bold", color: "#1a1a2e", textAlign: "center", marginBottom: 8 },
   subtitle: { fontSize: 14, color: "#666", textAlign: "center", marginBottom: 24 },
@@ -726,6 +893,13 @@ const styles = StyleSheet.create({
   modalContent: { maxHeight: 200, marginBottom: 16 },
   modalBody: { fontSize: 16, lineHeight: 24, color: "#333", marginBottom: 8 },
   modalHint: { fontSize: 12, color: "#999", marginBottom: 16 },
+  onboardHintModal: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+    alignItems: "center",
+  },
+  onboardHintText: { fontSize: 18, color: "#333", marginBottom: 20 },
   modalActions: { flexDirection: "row", gap: 12, justifyContent: "flex-end" },
   modalBtn: { paddingVertical: 12, paddingHorizontal: 24, borderRadius: 8 },
   modalBtnLater: { backgroundColor: "#f0f0f0" },
@@ -735,6 +909,17 @@ const styles = StyleSheet.create({
   examQ: { fontSize: 16, fontWeight: "600", marginBottom: 8 },
   examLabel: { fontSize: 12, color: "#666", marginTop: 8 },
   examInput: { padding: 12, backgroundColor: "#f5f5f5", borderRadius: 8, marginTop: 4 },
+  examOption: {
+    padding: 12,
+    backgroundColor: "#f5f5f5",
+    borderRadius: 8,
+    marginTop: 8,
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  examOptionSelected: { backgroundColor: "#E8F5E9", borderColor: "#4A90D9" },
+  examOptionText: { fontSize: 15, color: "#333" },
+  examOptionTextSelected: { color: "#4A90D9", fontWeight: "500" },
   examRecordRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -754,5 +939,22 @@ const styles = StyleSheet.create({
   },
   curveLabel: { fontSize: 10, color: "#666", marginTop: 4 },
   curveCount: { fontSize: 10, color: "#4A90D9", fontWeight: "600" },
+  calendarGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  calendarCell: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: "#eee",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  calendarCellChecked: { backgroundColor: "#4A90D9" },
+  calendarCellText: { fontSize: 12, color: "#999" },
+  calendarCellTextChecked: { color: "#fff", fontWeight: "600" },
   profileCard: { backgroundColor: "#fff", padding: 16, borderRadius: 12, marginBottom: 16 },
 });

@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, NavLink } from "react-router-dom";
 import { Layout, Menu } from "antd";
 import Categories from "./pages/Categories";
 import Knowledge from "./pages/Knowledge";
+import Questions from "./pages/Questions";
 import "./App.css";
 
 const { Header, Content, Sider } = Layout;
@@ -21,6 +22,7 @@ function App() {
               items={[
                 { key: "categories", label: <NavLink to="/">知识分类</NavLink> },
                 { key: "knowledge", label: <NavLink to="/knowledge">知识点</NavLink> },
+                { key: "questions", label: <NavLink to="/questions">选择题</NavLink> },
               ]}
             />
           </Sider>
@@ -28,6 +30,7 @@ function App() {
             <Routes>
               <Route path="/" element={<Categories />} />
               <Route path="/knowledge" element={<Knowledge />} />
+              <Route path="/questions" element={<Questions />} />
             </Routes>
           </Content>
         </Layout>
